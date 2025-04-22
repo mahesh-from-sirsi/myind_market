@@ -1,63 +1,56 @@
-# gap_prediction_dashboard.py
-
 import streamlit as st
 import pandas as pd
-import datetime
-from sklearn.ensemble import RandomForestClassifier
 import joblib
+import datetime
+import numpy as np
 
+# Load the trained model and encoder
+model = joblib.load("nse_data/gap_model.pkl")
+label_encoder = joblib.load("nse_data/label_encoder.pkl")
 
-# 1. Load model (pretrained or placeholder)
-def load_model():
+# Load today's features from previously generated daily data
+@st.cache_data
+def load_today_features():
     try:
-        model = joblib.load("gap_prediction_model.pkl")
-    except:
-        model = RandomForestClassifier()
-        import numpy as np
+        df = pd.read_csv("nse_data/latest_intraday_features.csv")
+        df['DATE'] = pd.to_datetime(df['DATE'])
+        return df
+    except FileNotFoundError:
+        return pd.DataFrame()
 
-        X_dummy = np.array([[1, 0.3, 1.1, 85, 120, 1],
-                            [-1, -0.2, 0.8, 65, -90, -1],
-                            [-1, -0.4, 0.9, 10, -50, -1]])
-        y_dummy = np.array(["Gap Up", "Gap Down", "Gap Down"])
+def predict(df):
+    features = ['OPEN', 'HIGH', 'LOW', 'CLOSE', 'VWAP', 'TOTTRDQTY', 'PUT_OI', 'CALL_OI', 'PCR']
+    df["prediction"] = model.predict(df[features])
+    df["probabilities"] = model.predict_proba(df[features]).tolist()
+    df["GAP_LABEL"] = label_encoder.inverse_transform(df["prediction"])
+    df[["PROB_GAP_DOWN", "PROB_FLAT", "PROB_GAP_UP"]] = pd.DataFrame(df["probabilities"].to_list(), index=df.index)
+    return df
 
-        model.fit(X_dummy, y_dummy)
-    return model
+st.title("🔮 NSE Gap Up / Down Prediction Dashboard")
+st.markdown("Model-based probability forecast for the next trading day's open gap")
 
+# Load today's feature data
+today_data = load_today_features()
 
-# 2. Fetch Data (Dummy for now - Replace with real-time scrapers or API integrations)
-def fetch_stock_data():
-    # Sample data to mimic real features
-    data = pd.DataFrame([
-        {"symbol": "NIFTY", "oi_change": 1, "iv_change": 0.3, "pcr": 1.1, "sgx_nifty_diff": 85, "dow_futures": 120,
-         "price_vs_cpr": 1},
-        {"symbol": "BANKNIFTY", "oi_change": -1, "iv_change": -0.2, "pcr": 0.8, "sgx_nifty_diff": 65,
-         "dow_futures": -90, "price_vs_cpr": -1},
-        {"symbol": "RELIANCE", "oi_change": -1, "iv_change": -0.4, "pcr": 0.9, "sgx_nifty_diff": 10, "dow_futures": -50,
-         "price_vs_cpr": -1},
-    ])
-    return data
+if today_data.empty:
+    st.warning("Today's feature data not found. Please ensure the latest data is generated and saved at 'nse_data/latest_intraday_features.csv'")
+else:
+    predictions = predict(today_data)
 
+    # Filter to only Nifty, Banknifty, and Nifty50 symbols
+    symbols = ['NIFTY', 'BANKNIFTY', 'RELIANCE', 'HDFCBANK', 'ICICIBANK', 'INFY', 'SBIN', 'TCS', 'LT', 'AXISBANK', 'ITC', 'KOTAKBANK']
+    predictions = predictions[predictions['SYMBOL'].isin(symbols)]
 
-# 3. Predict Gap Bias
-def predict_gap(data, model):
-    features = data.drop(columns=["symbol"])
-    predictions = model.predict(features)
-    probabilities = model.predict_proba(features)
-    data["gap_bias"] = predictions
-    data["confidence"] = probabilities.max(axis=1)
-    return data
+    # Display table
+    st.subheader("📈 Predictions")
+    display_cols = ['SYMBOL', 'GAP_LABEL', 'PROB_GAP_UP', 'PROB_GAP_DOWN', 'PROB_FLAT']
+    st.dataframe(predictions[display_cols].sort_values(by='PROB_GAP_UP', ascending=False).reset_index(drop=True))
 
-
-# 4. UI with Streamlit
-st.set_page_config(page_title="Gap Prediction Dashboard", layout="wide")
-st.title("📊 Gap Up / Gap Down Predictor - F&O Universe")
-
-st.markdown("Runs daily after 3 PM. Uses ML model to predict next-day opening bias.")
-
-# Main Workflow
-model = load_model()
-data = fetch_stock_data()
-results = predict_gap(data, model)
-
-# Render Table
-st.dataframe(results.style.format({"confidence": "{:.2%}"}))
+    # Download option
+    csv = predictions[display_cols].to_csv(index=False)
+    st.download_button(
+        label="📥 Download Predictions as CSV",
+        data=csv,
+        file_name="gap_predictions.csv",
+        mime="text/csv",
+    )

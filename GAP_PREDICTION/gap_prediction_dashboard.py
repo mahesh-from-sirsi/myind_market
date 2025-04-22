@@ -13,6 +13,14 @@ def load_model():
         model = joblib.load("gap_prediction_model.pkl")
     except:
         model = RandomForestClassifier()
+        import numpy as np
+
+        X_dummy = np.array([[1, 0.3, 1.1, 85, 120, 1],
+                            [-1, -0.2, 0.8, 65, -90, -1],
+                            [-1, -0.4, 0.9, 10, -50, -1]])
+        y_dummy = np.array(["Gap Up", "Gap Down", "Gap Down"])
+
+        model.fit(X_dummy, y_dummy)
     return model
 
 
